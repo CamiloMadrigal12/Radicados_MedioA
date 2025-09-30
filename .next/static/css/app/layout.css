@@ -1186,6 +1186,12 @@
       opacity: 100%;
     }
   }
+  .focus\:ring-1 {
+    &:focus {
+      --tw-ring-shadow: var(--tw-ring-inset,) 0 0 0 calc(1px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);
+      box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+    }
+  }
   .focus\:ring-2 {
     &:focus {
       --tw-ring-shadow: var(--tw-ring-inset,) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);
@@ -1260,6 +1266,12 @@
       translate: var(--tw-translate-x) var(--tw-translate-y);
     }
   }
+  .data-\[swipe\=end\]\:translate-x-\[var\(--radix-toast-swipe-end-x\)\] {
+    &[data-swipe="end"] {
+      --tw-translate-x: var(--radix-toast-swipe-end-x);
+      translate: var(--tw-translate-x) var(--tw-translate-y);
+    }
+  }
   .data-\[swipe\=move\]\:translate-x-\[var\(--radix-toast-swipe-move-x\)\] {
     &[data-swipe="move"] {
       --tw-translate-x: var(--radix-toast-swipe-move-x);
@@ -1281,6 +1293,11 @@
       right: calc(var(--spacing) * 0);
     }
   }
+  .sm\:bottom-0 {
+    @media (width >= 40rem) {
+      bottom: calc(var(--spacing) * 0);
+    }
+  }
   .sm\:flex-col {
     @media (width >= 40rem) {
       flex-direction: column;
@@ -1300,6 +1317,27 @@
     @media (width >= 40rem) {
       font-size: var(--text-lg);
       line-height: var(--tw-leading, var(--text-lg--line-height));
+    }
+  }
+  .sm\:last\:top-auto {
+    @media (width >= 40rem) {
+      &:last-child {
+        top: auto;
+      }
+    }
+  }
+  .sm\:last\:right-0 {
+    @media (width >= 40rem) {
+      &:last-child {
+        right: calc(var(--spacing) * 0);
+      }
+    }
+  }
+  .sm\:last\:bottom-0 {
+    @media (width >= 40rem) {
+      &:last-child {
+        bottom: calc(var(--spacing) * 0);
+      }
     }
   }
   .md\:max-w-\[420px\] {
