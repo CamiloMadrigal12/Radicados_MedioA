@@ -3,7 +3,7 @@ import type { Metadata } from "next"
 import type { ReactNode } from "react"
 import "./globals.css"
 
-import { ToastProvider, ToastViewport } from "@/components/ui/toast"
+import { Toaster } from "@/components/ui/toaster"
 
 export const metadata: Metadata = {
   title: "Sistema de Seguimiento de Radicados",
@@ -12,12 +12,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="es">
+    <html lang="es" suppressHydrationWarning>
       <body className="min-h-screen bg-white text-slate-900 antialiased">
-        <ToastProvider>
-          {children}
-          <ToastViewport />
-        </ToastProvider>
+        {children}
+        {/* Renderer de toasts */}
+        <Toaster />
       </body>
     </html>
   )
