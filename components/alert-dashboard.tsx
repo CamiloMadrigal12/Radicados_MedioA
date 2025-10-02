@@ -1,18 +1,19 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo } from "react"
-import { createClient } from "@/lib/supabase"
+import { createClient, RADICADOS_TABLE, addBusinessDays } from "@/lib/supabase"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { AlertTriangle, Clock, Bell, CheckCircle, Calendar, User } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts"
 
-/** ----------------------------- Tipos ----------------------------- */
+/* ----------------------------- Tipos ----------------------------- */
 interface Radicado {
   id: string
   funcionario: string
-  fecha_radicado: string
+  fecha_radicado: string | null
   numero_radicado: string
   fecha_asignacion: string | null
   fecha_limite_respuesta: string | null
@@ -31,17 +32,17 @@ interface AlertStats {
   total: number
 }
 
-/** ------------------------- Utilidades fecha ---------------------- */
+/* ------------------------- Utilidades fecha ---------------------- */
+// parsea "YYYY-MM-DD" como fecha local (evita desfases por zona horaria)
+const parseLocalDate = (s: string) => {
+  const [y, m, d] = s.split("-").map(Number)
+  return new Date(y, (m ?? 1) - 1, d ?? 1)
+}
+
 const startOfLocalDay = (d: Date) => {
   const x = new Date(d)
   x.setHours(0, 0, 0, 0)
   return x
-}
-
-const formatDate = (dateString: string | null | undefined): string => {
-  if (!dateString) return ""
-  const date = new Date(dateString)
-  return date.toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" })
 }
 
 /** Cuenta días hábiles desde hoy (excluyendo hoy) hasta la fecha límite */
@@ -51,61 +52,54 @@ const businessDaysUntil = (deadlineDate: Date): number => {
   if (deadline <= today) return 0
 
   let count = 0
-  const cursor = new Date(today)
-  while (cursor < deadline) {
-    cursor.setDate(cursor.getDate() + 1)
-    const day = cursor.getDay() // 0=Dom,6=Sáb
+  const cur = new Date(today)
+  while (cur < deadline) {
+    cur.setDate(cur.getDate() + 1)
+    const day = cur.getDay() // 0=Dom, 6=Sáb
     if (day !== 0 && day !== 6) count++
   }
   return count
 }
 
-/** Nivel visual de alerta en función de días hábiles restantes */
-const getAlertLevel = (fechaLimite: string): "critical" | "warning" | "info" => {
-  const days = businessDaysUntil(new Date(fechaLimite))
-  if (days <= 0) return "critical"   // vencido
-  if (days <= 3) return "critical"   // <= 3 días hábiles: crítico
-  if (days <= 7) return "warning"    // <= 7 días hábiles: advertencia
-  return "info"                      // 8-10 días hábiles
+const getAlertLevel = (fechaLimiteISO: string): "critical" | "warning" | "info" => {
+  const days = businessDaysUntil(parseLocalDate(fechaLimiteISO))
+  if (days <= 0) return "critical"
+  if (days <= 3) return "critical"
+  if (days <= 7) return "warning"
+  return "info"
 }
 
-const getDaysRemainingText = (fechaLimite: string): string => {
-  const days = businessDaysUntil(new Date(fechaLimite))
+const getDaysRemainingText = (fechaLimiteISO: string): string => {
+  const days = businessDaysUntil(parseLocalDate(fechaLimiteISO))
   if (days <= 0) return "Vencido"
   if (days === 1) return "1 día hábil"
   return `${days} días hábiles`
 }
 
-/** ============================= Componente ============================= */
+/* ============================= Componente ============================= */
 export function AlertDashboard() {
   const [alertRadicados, setAlertRadicados] = useState<Radicado[]>([])
-  const [stats, setStats] = useState<AlertStats>({
-    vencidos: 0,
-    proximosAVencer: 0,
-    enAlerta: 0,
-    total: 0,
-  })
+  const [stats, setStats] = useState<AlertStats>({ vencidos: 0, proximosAVencer: 0, enAlerta: 0, total: 0 })
   const [isLoading, setIsLoading] = useState(true)
   const { toast } = useToast()
 
-  // Cliente Supabase estable entre renders
   const supabase = useMemo(() => createClient(), [])
 
-  /** Carga y sincroniza estado de alertas */
+  /** Carga y sincroniza estado de alertas (vencidos o ≤10 días hábiles) */
   const fetchAlertsAndUpdateStatus = useCallback(async () => {
     setIsLoading(true)
     try {
-      // Solo pendientes con fecha límite válida
+      // Traer TODOS los pendientes (aunque la fecha límite esté NULL)
       const { data, error } = await supabase
-        .from("radicados")
+        .from(RADICADOS_TABLE)
         .select(
           "id, funcionario, fecha_radicado, numero_radicado, fecha_asignacion, fecha_limite_respuesta, tema, canal, remitente, solicitud, alerta, fecha_radicado_respuesta",
         )
         .is("fecha_radicado_respuesta", null)
-        .not("fecha_limite_respuesta", "is", null)
 
       if (error) throw error
-      const radicados = (data || []) as Radicado[]
+
+      const pendientes = (data || []) as Radicado[]
 
       const toAlert: Radicado[] = []
       const toTrue: string[] = []
@@ -114,36 +108,39 @@ export function AlertDashboard() {
       let vencidos = 0
       let proximos = 0
 
-      for (const r of radicados) {
-        const dl = r.fecha_limite_respuesta!
-        const daysBusiness = businessDaysUntil(new Date(dl))
-        const shouldAlert = daysBusiness <= 10 // regla de negocio
+      for (const r of pendientes) {
+        // Fecha límite: usar la de DB o calcular desde fecha_radicado (+16 días hábiles)
+        let limite: Date | null = null
+        if (r.fecha_limite_respuesta) {
+          limite = parseLocalDate(r.fecha_limite_respuesta)
+        } else if (r.fecha_radicado) {
+          limite = await addBusinessDays(parseLocalDate(r.fecha_radicado), 16)
+        }
 
-        // Clasificación para métricas
-        if (daysBusiness <= 0) vencidos++
-        else if (daysBusiness <= 10) proximos++
+        if (!limite) continue // si no se puede determinar, se omite
+
+        const days = businessDaysUntil(limite)
+        const shouldAlert = days <= 10
+
+        if (days <= 0) vencidos++
+        else if (shouldAlert) proximos++
 
         if (shouldAlert) toAlert.push(r)
 
-        // Sincronizar columna alerta solo si cambió
+        // sincronizar columna alerta (opcional)
         if (shouldAlert && !r.alerta) toTrue.push(r.id)
         if (!shouldAlert && r.alerta) toFalse.push(r.id)
       }
 
-      // Actualizaciones masivas
-      if (toTrue.length) {
-        await supabase.from("radicados").update({ alerta: true }).in("id", toTrue)
-      }
-      if (toFalse.length) {
-        await supabase.from("radicados").update({ alerta: false }).in("id", toFalse)
-      }
+      if (toTrue.length) await supabase.from(RADICADOS_TABLE).update({ alerta: true }).in("id", toTrue)
+      if (toFalse.length) await supabase.from(RADICADOS_TABLE).update({ alerta: false }).in("id", toFalse)
 
       setAlertRadicados(toAlert)
       setStats({
         vencidos,
         proximosAVencer: proximos,
         enAlerta: vencidos + proximos,
-        total: radicados.length,
+        total: pendientes.length,
       })
     } catch (err) {
       console.error("Error fetching alerts:", err)
@@ -157,14 +154,24 @@ export function AlertDashboard() {
     }
   }, [supabase, toast])
 
-  /** Primera carga + chequeo cada hora */
   useEffect(() => {
     fetchAlertsAndUpdateStatus()
-    const interval = setInterval(fetchAlertsAndUpdateStatus, 60 * 60 * 1000)
-    return () => clearInterval(interval)
+    const id = setInterval(fetchAlertsAndUpdateStatus, 60 * 60 * 1000)
+    return () => clearInterval(id)
   }, [fetchAlertsAndUpdateStatus])
 
-  /** ----------------------------- UI ----------------------------- */
+  /* -------- Datos para la torta (dona) -------- */
+  const pieData = useMemo(() => {
+    const fuera = Math.max(stats.total - stats.enAlerta, 0)
+    return [
+      { name: "Vencidos", value: stats.vencidos },
+      { name: "Próximos a vencer", value: stats.proximosAVencer },
+      { name: "Fuera de alerta", value: fuera },
+    ]
+  }, [stats])
+
+  const PIE_COLORS = ["#ef4444", "#f59e0b", "#cbd5e1"] // rojo / naranja / gris
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -176,7 +183,7 @@ export function AlertDashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Resumen de alertas */}
+      {/* RESUMEN */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="border-red-200 dark:border-red-800">
           <CardContent className="p-4">
@@ -195,9 +202,7 @@ export function AlertDashboard() {
             <div className="flex items-center space-x-2">
               <Clock className="h-5 w-5 text-orange-600 dark:text-orange-400" />
               <div>
-                <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
-                  {stats.proximosAVencer}
-                </div>
+                <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">{stats.proximosAVencer}</div>
                 <div className="text-sm text-orange-700 dark:text-orange-300">Próximos a vencer</div>
               </div>
             </div>
@@ -229,16 +234,14 @@ export function AlertDashboard() {
         </Card>
       </div>
 
-      {/* Listado de radicados en alerta */}
+      {/* LISTA */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center text-slate-800 dark:text-slate-100">
             <Bell className="mr-2 h-5 w-5 text-orange-600" />
             Radicados que requieren atención
           </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Vencidos o con ≤ 10 días hábiles restantes
-          </p>
+          <p className="text-sm text-muted-foreground">Vencidos o con ≤ 10 días hábiles restantes</p>
         </CardHeader>
         <CardContent>
           {alertRadicados.length === 0 ? (
@@ -250,14 +253,14 @@ export function AlertDashboard() {
           ) : (
             <div className="space-y-4">
               {alertRadicados.map((r) => {
-                const alertLevel = getAlertLevel(r.fecha_limite_respuesta!)
+                const nivel = r.fecha_limite_respuesta ? getAlertLevel(r.fecha_limite_respuesta) : "critical"
                 return (
                   <div
                     key={r.id}
                     className={`p-4 rounded-lg border-l-4 ${
-                      alertLevel === "critical"
+                      nivel === "critical"
                         ? "border-l-red-500 bg-red-50 dark:bg-red-900/10"
-                        : alertLevel === "warning"
+                        : nivel === "warning"
                         ? "border-l-orange-500 bg-orange-50 dark:bg-orange-900/10"
                         : "border-l-yellow-500 bg-yellow-50 dark:bg-yellow-900/10"
                     }`}
@@ -266,20 +269,22 @@ export function AlertDashboard() {
                       <div className="flex-1">
                         <div className="flex items-center space-x-2 mb-2">
                           <Badge
-                            variant={alertLevel === "critical" ? "destructive" : "secondary"}
+                            variant={nivel === "critical" ? "destructive" : "secondary"}
                             className={
-                              alertLevel === "critical"
+                              nivel === "critical"
                                 ? "bg-red-100 text-red-800 border-red-200 dark:bg-red-900/20 dark:text-red-300"
-                                : alertLevel === "warning"
+                                : nivel === "warning"
                                 ? "bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/20 dark:text-orange-300"
                                 : "bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300"
                             }
                           >
                             {r.numero_radicado}
                           </Badge>
-                          <span className="text-sm text-slate-600 dark:text-slate-400">
-                            {getDaysRemainingText(r.fecha_limite_respuesta!)}
-                          </span>
+                          {r.fecha_limite_respuesta && (
+                            <span className="text-sm text-slate-600 dark:text-slate-400">
+                              {getDaysRemainingText(r.fecha_limite_respuesta)}
+                            </span>
+                          )}
                         </div>
 
                         <h4 className="font-semibold text-slate-800 dark:text-slate-200 mb-1">
@@ -295,7 +300,9 @@ export function AlertDashboard() {
                           <div className="flex items-center">
                             <Calendar className="mr-1 h-4 w-4" />
                             <span className="font-medium">Fecha límite:</span>
-                            <span className="ml-1">{formatDate(r.fecha_limite_respuesta)}</span>
+                            <span className="ml-1">
+                              {r.fecha_limite_respuesta ? new Date(r.fecha_limite_respuesta).toLocaleDateString("es-ES") : "—"}
+                            </span>
                           </div>
                           <div className="flex items-center">
                             <span className="font-medium">Remitente:</span>
@@ -309,11 +316,7 @@ export function AlertDashboard() {
                       </div>
 
                       <div className="ml-4">
-                        {alertLevel === "critical" ? (
-                          <AlertTriangle className="h-6 w-6 text-red-500" />
-                        ) : (
-                          <Clock className="h-6 w-6 text-orange-500" />
-                        )}
+                        {nivel === "critical" ? <AlertTriangle className="h-6 w-6 text-red-500" /> : <Clock className="h-6 w-6 text-orange-500" />}
                       </div>
                     </div>
                   </div>
@@ -321,6 +324,37 @@ export function AlertDashboard() {
               })}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* DONA / TORTA (debajo del listado) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-slate-800 dark:text-slate-100">Distribución por estado</CardTitle>
+          <p className="text-sm text-muted-foreground">Desglose de los radicados pendientes por estado de alerta</p>
+        </CardHeader>
+        <CardContent>
+          <div className="relative h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={70} outerRadius={100} paddingAngle={2}>
+                  {pieData.map((_, i) => (
+                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+
+            {/* contador centrado */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="text-center">
+                <div className="text-3xl font-semibold">{stats.enAlerta}</div>
+                <div className="text-slate-500 text-xs">en alerta</div>
+              </div>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

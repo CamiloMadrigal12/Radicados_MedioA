@@ -13,8 +13,8 @@ export const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      "flex h-12 w-full items-center justify-center gap-1 rounded-2xl bg-muted/70 p-1 text-muted-foreground",
-      "backdrop-blur supports-[backdrop-filter]:bg-muted/60 shadow-inner",
+      // contenedor de la barra de pestañas
+      "inline-grid gap-0 text-muted-foreground",
       className
     )}
     {...props}
@@ -29,10 +29,11 @@ export const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      "flex-1 rounded-xl px-4 py-2 text-sm font-medium",
-      "transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-      "data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
-      "disabled:pointer-events-none disabled:opacity-50",
+      "inline-flex items-center justify-center whitespace-nowrap",
+      "rounded-xl px-4 py-2 text-sm font-medium transition-all",
+      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+      // estado activo
+      "data-[state=active]:bg-white data-[state=active]:text-foreground data-[state=active]:shadow-sm",
       className
     )}
     {...props}
@@ -44,10 +45,7 @@ export const TabsContent = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.Content>
 >(({ className, ...props }, ref) => (
-  <TabsPrimitive.Content
-    ref={ref}
-    className={cn("mt-4 rounded-xl border p-6", className)}
-    {...props}
-  />
+  // sin bordes ni padding forzados para que el contenido se vea tal cual tus componentes
+  <TabsPrimitive.Content ref={ref} className={cn("outline-none", className)} {...props} />
 ))
 TabsContent.displayName = TabsPrimitive.Content.displayName

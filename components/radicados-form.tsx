@@ -1,360 +1,340 @@
 "use client"
 
-import type React from "react"
-
 import { useState } from "react"
+import { createClient, RADICADOS_TABLE } from "@/lib/supabase"
+import { useToast } from "@/hooks/use-toast"
+
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Popover, PopoverContent } from "@/components/ui/popover"
+import { PopoverTrigger } from "@radix-ui/react-popover"
 import { Calendar } from "@/components/ui/calendar"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { CalendarIcon, Save, RotateCcw, AlertTriangle } from "lucide-react"
-import { format } from "date-fns"
-import { es } from "date-fns/locale"
+import { CalendarIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { useToast } from "@/hooks/use-toast"
-import { createClient } from "@/lib/supabase"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 
-interface RadicadoFormData {
-  funcionario: string
-  fechaRadicado: Date | undefined
-  numeroRadicado: string
-  fechaAsignacion: Date | undefined
-  tema: string
-  canal: string
-  remitente: string
-  solicitud: string
+/* ================== Catálogos ================== */
+
+const THEMES = [
+  "Vertimientos",
+  "Pozos sépticos",
+  "Residuos",
+  "Forestal",
+  "Abejas y avispas",
+  "Minería",
+  "Ruido",
+  "Control y vigilancia empresas",
+  "Bienestar animal",
+  "Fauna silvestre",
+  "Olores ofensivos",
+  "Rocería",
+  "Visitas agropecuarias",
+  "Huertas",
+  "Evaluación licencias ambientales",
+  "Calidad del aire",
+  "Fuentes hídricas",
+  "Compra de predios",
+  "Administrativo",
+  "Invitaciones",
+  "Captación de aguas",
+  "Solicitud de siembra",
+  "Solicitud de información",
+  "Otros",
+]
+
+const BARRIOS_VEREDAS = [
+  "La Veta","Zarzal La Luz","Zarzal Curazao","Ancon","El Noral","El Salado","Sabaneta",
+  "Quebrada Arriba","Alvarado","Montañita","Peñolcito","Cabuyal","Granizal","El Convento",
+  "Fontidueño","Cristo Rey","Simon Bolivar","Obrero","Yarumito","Las Vegas","Tobon Quintero",
+  "La Asunción","La Azulita","El Porvenir","Villanueva","El Recreo","El Remanso","Pedregal",
+  "La Misericordia","Machado","San Juan","Maria","Tablazo-Canoas","El Mojon","C. Multiple",
+  "Fatima","Pedrera","San Francisco","Miraflores",
+]
+
+const CANALES = [
+  "Ventanilla",
+  "Correo electrónico",
+  "Teléfono",
+  "WhatsApp",
+  "PQRS",
+  "Presencial",
+  "Otro",
+]
+
+/* ================== Utils ================== */
+const toLocalISO = (d: Date) => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
 }
 
-const canales = ["Correo Electrónico", "Físico", "Plataforma Digital", "Teléfono", "Fax", "Ventanilla Única"]
-
-export function RadicadosForm() {
-  const { toast } = useToast()
-  const [isLoading, setIsLoading] = useState(false)
-  const [formData, setFormData] = useState<RadicadoFormData>({
-    funcionario: "",
-    fechaRadicado: new Date(),
-    numeroRadicado: "",
-    fechaAsignacion: undefined,
-    tema: "",
-    canal: "",
-    remitente: "",
-    solicitud: "",
-  })
-
-  // Cliente de Supabase centralizado
+/* ================== Formulario ================== */
+export default function RadicadosForm() {
   const supabase = createClient()
-  // Seguimos mostrando alerta si faltan las variables públicas
-  const hasSupabaseEnv = Boolean(
-    process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  )
+  const { toast } = useToast()
 
-  const calculateBusinessDays = (startDate: Date, businessDays: number): Date => {
-    const currentDate = new Date(startDate)
-    let addedDays = 0
-    while (addedDays < businessDays) {
-      currentDate.setDate(currentDate.getDate() + 1)
-      // Fines de semana: sábado = 6, domingo = 0
-      if (currentDate.getDay() !== 0 && currentDate.getDay() !== 6) {
-        addedDays++
-      }
-    }
-    return currentDate
-  }
+  // Campos
+  const [numeroRadicado, setNumeroRadicado] = useState("")
+  const [funcionario, setFuncionario] = useState("")
+  const [tema, setTema] = useState<string>("")
+  const [zona, setZona] = useState<"URBANO" | "RURAL" | "">("")
+  const [barrioVereda, setBarrioVereda] = useState<string>("")
+  const [canal, setCanal] = useState<string>("")
+  const [remitente, setRemitente] = useState<string>("")
+  const [solicitud, setSolicitud] = useState<string>("")
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Fechas
+  const [fechaRadicado, setFechaRadicado] = useState<Date | undefined>(new Date())
+  const [fechaRecepcion, setFechaRecepcion] = useState<Date | undefined>(new Date())
+  const [fechaAsignacion, setFechaAsignacion] = useState<Date | undefined>(undefined) // 👈 TERCERA FECHA
+
+  const [saving, setSaving] = useState(false)
+
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!hasSupabaseEnv) {
-      toast({
-        title: "Error de configuración",
-        description: "Las variables de entorno de Supabase no están configuradas",
-        variant: "destructive",
-      })
+    if (!numeroRadicado.trim()) {
+      toast({ title: "Número de radicado requerido", variant: "destructive" })
+      return
+    }
+    if (!fechaRadicado) {
+      toast({ title: "Fecha de radicado requerida", variant: "destructive" })
+      return
+    }
+    if (!fechaRecepcion) {
+      toast({ title: "Fecha de recepción requerida", variant: "destructive" })
+      return
+    }
+    if (!tema) {
+      toast({ title: "Selecciona un tema", variant: "destructive" })
+      return
+    }
+    if (!zona) {
+      toast({ title: "Selecciona zona (Urbano/Rural)", variant: "destructive" })
+      return
+    }
+    if (!barrioVereda) {
+      toast({ title: "Selecciona Barrio/Vereda", variant: "destructive" })
       return
     }
 
-    setIsLoading(true)
-
     try {
-      // 16 días hábiles desde fecha_asignacion
-      const fechaLimite = formData.fechaAsignacion
-        ? calculateBusinessDays(formData.fechaAsignacion, 16)
-        : null
+      setSaving(true)
 
-      const { error } = await supabase.from("radicados").insert({
-        funcionario: formData.funcionario,
-        fecha_radicado: formData.fechaRadicado?.toISOString().split("T")[0],
-        numero_radicado: formData.numeroRadicado,
-        fecha_asignacion: formData.fechaAsignacion?.toISOString().split("T")[0],
-        fecha_limite_respuesta: fechaLimite?.toISOString().split("T")[0],
-        tema: formData.tema,
-        canal: formData.canal,
-        remitente: formData.remitente,
-        solicitud: formData.solicitud,
-        alerta: false,
+      const { error } = await supabase.from(RADICADOS_TABLE).insert({
+        numero_radicado: numeroRadicado.trim(),
+        funcionario: funcionario.trim() || null,
+        tema,
+        zona,
+        barrio_vereda: barrioVereda,
+        canal: canal || null,
+        remitente: remitente.trim() || null,
+        solicitud: solicitud.trim() || null,
+
+        // Fechas
+        fecha_radicado: toLocalISO(fechaRadicado),
+        fecha_recepcion: toLocalISO(fechaRecepcion),
+        fecha_asignacion: fechaAsignacion ? toLocalISO(fechaAsignacion) : null, // 👈 guardamos asignación
       })
 
       if (error) throw error
 
-      toast({
-        title: "Radicado registrado exitosamente",
-        description: `Número de radicado: ${formData.numeroRadicado}`,
-      })
+      toast({ title: "Radicado creado", description: `#${numeroRadicado}` })
 
       // Reset
-      setFormData({
-        funcionario: "",
-        fechaRadicado: new Date(),
-        numeroRadicado: "",
-        fechaAsignacion: undefined,
-        tema: "",
-        canal: "",
-        remitente: "",
-        solicitud: "",
-      })
-    } catch (error) {
-      console.error("Error:", error)
+      setNumeroRadicado("")
+      setFuncionario("")
+      setTema("")
+      setZona("")
+      setBarrioVereda("")
+      setCanal("")
+      setRemitente("")
+      setSolicitud("")
+      setFechaRadicado(new Date())
+      setFechaRecepcion(new Date())
+      setFechaAsignacion(undefined)
+    } catch (err: any) {
       toast({
-        title: "Error al registrar radicado",
-        description: "Por favor intente nuevamente",
+        title: "No se pudo guardar",
+        description: err?.message ?? "Inténtalo nuevamente",
         variant: "destructive",
       })
     } finally {
-      setIsLoading(false)
+      setSaving(false)
     }
   }
 
-  if (!hasSupabaseEnv) {
-    return (
-      <div className="space-y-4">
-        <Alert className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950">
-          <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-          <AlertDescription className="text-amber-800 dark:text-amber-200">
-            <strong>Configuración requerida:</strong> Para usar el formulario de radicados, necesitas configurar las
-            variables de entorno de Supabase en Project Settings:
-            <br />• <code>NEXT_PUBLIC_SUPABASE_URL</code>
-            <br />• <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code>
-          </AlertDescription>
-        </Alert>
-        <div className="opacity-50 pointer-events-none">
-          {/* Vista previa deshabilitada */}
-          <form className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Funcionario Responsable *
-                </Label>
-                <Input placeholder="Nombre del funcionario" disabled />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Número de Radicado *</Label>
-                <Input placeholder="Ej: RAD-2025-001" disabled />
-              </div>
-            </div>
-            <Button disabled className="w-full">
-              Configurar Supabase para continuar
-            </Button>
-          </form>
+  return (
+    <form onSubmit={onSubmit} className="space-y-6">
+      {/* Cabecera visual */}
+      <div className="rounded-2xl bg-gradient-to-r from-violet-600 to-fuchsia-600 p-4 text-white shadow-sm">
+        <h3 className="font-semibold text-lg">Registrar Nuevo Radicado</h3>
+        <p className="text-white/80 text-sm">Complete la información del documento a radicar</p>
+      </div>
+
+      {/* Fila 1: Número & Funcionario */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <Label>Número de radicado</Label>
+          <Input value={numeroRadicado} onChange={(e) => setNumeroRadicado(e.target.value)} />
+        </div>
+        <div>
+          <Label>Funcionario</Label>
+          <Input value={funcionario} onChange={(e) => setFuncionario(e.target.value)} />
         </div>
       </div>
-    )
-  }
 
-  return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Funcionario */}
-        <div className="space-y-2">
-          <Label htmlFor="funcionario" className="text-sm font-medium text-slate-700 dark:text-slate-300">
-            Funcionario Responsable *
-          </Label>
-          <Input
-            id="funcionario"
-            value={formData.funcionario}
-            onChange={(e) => setFormData((prev) => ({ ...prev, funcionario: e.target.value }))}
-            placeholder="Nombre del funcionario"
-            required
-            className="border-slate-300 focus:border-blue-500"
-          />
-        </div>
-
-        {/* Número de Radicado */}
-        <div className="space-y-2">
-          <Label htmlFor="numeroRadicado" className="text-sm font-medium text-slate-700 dark:text-slate-300">
-            Número de Radicado *
-          </Label>
-          <Input
-            id="numeroRadicado"
-            value={formData.numeroRadicado}
-            onChange={(e) => setFormData((prev) => ({ ...prev, numeroRadicado: e.target.value }))}
-            placeholder="Ej: RAD-2025-001"
-            required
-            className="border-slate-300 focus:border-blue-500"
-          />
-        </div>
-
-        {/* Fecha de Radicado */}
-        <div className="space-y-2">
-          <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Fecha de Radicado *</Label>
+      {/* Fila 2: Fechas (Radicado / Recepción / Asignación) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Fecha de radicado */}
+        <div className="space-y-1.5">
+          <Label>Fecha de radicado</Label>
           <Popover>
             <PopoverTrigger asChild>
               <Button
+                type="button"
                 variant="outline"
-                className={cn(
-                  "w-full justify-start text-left font-normal border-slate-300",
-                  !formData.fechaRadicado && "text-muted-foreground",
-                )}
+                className={cn("w-full justify-start text-left font-normal", !fechaRadicado && "text-muted-foreground")}
               >
                 <CalendarIcon className="mr-2 h-4 w-4" />
-                {formData.fechaRadicado ? (
-                  format(formData.fechaRadicado, "PPP", { locale: es })
-                ) : (
-                  <span>Seleccionar fecha</span>
-                )}
+                {fechaRadicado ? fechaRadicado.toLocaleDateString("es-ES") : "Seleccionar fecha"}
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0">
-              <Calendar
-                mode="single"
-                selected={formData.fechaRadicado}
-                onSelect={(date) => setFormData((prev) => ({ ...prev, fechaRadicado: date }))}
-                initialFocus
-                locale={es}
-              />
+              <Calendar mode="single" selected={fechaRadicado} onSelect={setFechaRadicado} initialFocus />
             </PopoverContent>
           </Popover>
         </div>
 
-        {/* Fecha de Asignación */}
-        <div className="space-y-2">
-          <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Fecha de Asignación</Label>
+        {/* Fecha de recepción */}
+        <div className="space-y-1.5">
+          <Label>Fecha de recepción</Label>
           <Popover>
             <PopoverTrigger asChild>
               <Button
+                type="button"
                 variant="outline"
-                className={cn(
-                  "w-full justify-start text-left font-normal border-slate-300",
-                  !formData.fechaAsignacion && "text-muted-foreground",
-                )}
+                className={cn("w-full justify-start text-left font-normal", !fechaRecepcion && "text-muted-foreground")}
               >
                 <CalendarIcon className="mr-2 h-4 w-4" />
-                {formData.fechaAsignacion ? (
-                  format(formData.fechaAsignacion, "PPP", { locale: es })
-                ) : (
-                  <span>Seleccionar fecha</span>
-                )}
+                {fechaRecepcion ? fechaRecepcion.toLocaleDateString("es-ES") : "Seleccionar fecha"}
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0">
-              <Calendar
-                mode="single"
-                selected={formData.fechaAsignacion}
-                onSelect={(date) => setFormData((prev) => ({ ...prev, fechaAsignacion: date }))}
-                initialFocus
-                locale={es}
-              />
+              <Calendar mode="single" selected={fechaRecepcion} onSelect={setFechaRecepcion} initialFocus />
             </PopoverContent>
           </Popover>
         </div>
 
-        {/* Canal */}
-        <div className="space-y-2">
-          <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Canal de Recepción</Label>
-          <Select value={formData.canal} onValueChange={(value) => setFormData((prev) => ({ ...prev, canal: value }))}>
-            <SelectTrigger className="border-slate-300 focus:border-blue-500">
-              <SelectValue placeholder="Seleccionar canal" />
+        {/* Fecha de asignación (👈 NUEVA TERCERA FECHA) */}
+        <div className="space-y-1.5">
+          <Label>Fecha de asignación</Label>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                className={cn("w-full justify-start text-left font-normal", !fechaAsignacion && "text-muted-foreground")}
+              >
+                <CalendarIcon className="mr-2 h-4 w-4" />
+                {fechaAsignacion ? fechaAsignacion.toLocaleDateString("es-ES") : "Seleccionar fecha"}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0">
+              <Calendar mode="single" selected={fechaAsignacion} onSelect={setFechaAsignacion} initialFocus />
+            </PopoverContent>
+          </Popover>
+        </div>
+      </div>
+
+      {/* Fila 3: Tema y Zona */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="md:col-span-2">
+          <Label>Tema</Label>
+          <Select value={tema} onValueChange={setTema}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Seleccionar tema" />
             </SelectTrigger>
-            <SelectContent>
-              {canales.map((canal) => (
-                <SelectItem key={canal} value={canal}>
-                  {canal}
+            <SelectContent className="max-h-72">
+              {THEMES.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {t}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
 
-        {/* Remitente */}
-        <div className="space-y-2">
-          <Label htmlFor="remitente" className="text-sm font-medium text-slate-700 dark:text-slate-300">
-            Remitente
-          </Label>
-          <Input
-            id="remitente"
-            value={formData.remitente}
-            onChange={(e) => setFormData((prev) => ({ ...prev, remitente: e.target.value }))}
-            placeholder="Nombre del remitente"
-            className="border-slate-300 focus:border-blue-500"
-          />
+        <div>
+          <Label>Zona</Label>
+          <Select value={zona} onValueChange={(v: "URBANO" | "RURAL") => setZona(v)}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Seleccionar zona" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="URBANO">Urbano</SelectItem>
+              <SelectItem value="RURAL">Rural</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
-      {/* Tema */}
-      <div className="space-y-2">
-        <Label htmlFor="tema" className="text-sm font-medium text-slate-700 dark:text-slate-300">
-          Tema/Asunto
-        </Label>
-        <Input
-          id="tema"
-          value={formData.tema}
-          onChange={(e) => setFormData((prev) => ({ ...prev, tema: e.target.value }))}
-          placeholder="Descripción breve del tema"
-          className="border-slate-300 focus:border-blue-500"
-        />
+      {/* Fila 4: Barrio/Vereda y Canal */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="md:col-span-2">
+          <Label>Barrio / Vereda</Label>
+          <Select value={barrioVereda} onValueChange={setBarrioVereda}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Seleccionar barrio o vereda" />
+            </SelectTrigger>
+            <SelectContent className="max-h-72">
+              {BARRIOS_VEREDAS.map((n) => (
+                <SelectItem key={n} value={n}>
+                  {n}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div>
+          <Label>Canal</Label>
+          <Select value={canal} onValueChange={setCanal}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Seleccionar canal" />
+            </SelectTrigger>
+            <SelectContent>
+              {CANALES.map((c) => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* Remitente */}
+      <div>
+        <Label>Remitente</Label>
+        <Input value={remitente} onChange={(e) => setRemitente(e.target.value)} />
       </div>
 
       {/* Solicitud */}
-      <div className="space-y-2">
-        <Label htmlFor="solicitud" className="text-sm font-medium text-slate-700 dark:text-slate-300">
-          Descripción de la Solicitud
-        </Label>
-        <Textarea
-          id="solicitud"
-          value={formData.solicitud}
-          onChange={(e) => setFormData((prev) => ({ ...prev, solicitud: e.target.value }))}
-          placeholder="Descripción detallada de la solicitud..."
-          rows={4}
-          className="border-slate-300 focus:border-blue-500 resize-none"
-        />
+      <div>
+        <Label>Solicitud</Label>
+        <Textarea value={solicitud} onChange={(e) => setSolicitud(e.target.value)} className="min-h-[120px]" />
       </div>
 
-      {/* Botones */}
-      <div className="flex gap-4 pt-4">
-        <Button
-          type="submit"
-          disabled={isLoading}
-          className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium"
-        >
-          <Save className="mr-2 h-4 w-4" />
-          {isLoading ? "Guardando..." : "Guardar Radicado"}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={resetForm}
-          className="border-slate-300 text-slate-700 hover:bg-slate-50 bg-transparent"
-        >
-          <RotateCcw className="mr-2 h-4 w-4" />
-          Limpiar
+      {/* Acciones */}
+      <div className="flex justify-end">
+        <Button type="submit" disabled={saving}>
+          {saving ? "Guardando..." : "Guardar Radicado"}
         </Button>
       </div>
     </form>
   )
-
-  function resetForm() {
-    setFormData({
-      funcionario: "",
-      fechaRadicado: new Date(),
-      numeroRadicado: "",
-      fechaAsignacion: undefined,
-      tema: "",
-      canal: "",
-      remitente: "",
-      solicitud: "",
-    })
-  }
 }
